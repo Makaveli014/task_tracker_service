@@ -1,0 +1,25 @@
+server:
+  port: "8080"
+
+database:
+  host: "localhost"
+  port: "3306"
+  user: "root"
+  password: "password"
+  dbname: "taskmanager"
+  max_open_conns: 25
+  max_idle_conns: 10
+  conn_max_lifetime: 300
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+  pool_size: 10
+
+jwt:
+  secret: "super-secret-key-change-in-production"
+  expiration: 24
+
+rate_limit:
+  requests_per_minute: 100
