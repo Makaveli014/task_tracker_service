@@ -15,25 +15,31 @@ func NewUserRepository(db *sql.DB) *UserRepository {
 	return &UserRepository{db: db}
 }
 
-func (r *UserRepository) Create(ctx context.Context, email, username, passwordHash string) (*models.User, error) {
+func (r *UserRepository) Create(ctx context.Context, email, name, passwordHash string) (*models.User, error) {
 	res, err := r.db.ExecContext(ctx,
-		"INSERT INTO users (email, username, password_hash) VALUES (?, ?, ?)",
-		email, username, passwordHash,
+		"INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)",
+		email, name, passwordHash,
 	)
 	if err != nil {
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
 	return r.GetByID(ctx, uint64(id))
 }
 
 func (r *UserRepository) GetByID(ctx context.Context, id uint64) (*models.User, error) {
 	u := &models.User{}
 	err := r.db.QueryRowContext(ctx,
-		"SELECT id, email, username, password_hash, created_at FROM users WHERE id = ?", id,
-	).Scan(&u.ID, &u.Email, &u.Username, &u.PasswordHash, &u.CreatedAt)
+		"SELECT id, email, name, password_hash, created_at FROM users WHERE id = ?", id,
+	).Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
+	}
+	if err == nil {
+		u.Username = u.Name
 	}
 	return u, err
 }
@@ -41,10 +47,13 @@ func (r *UserRepository) GetByID(ctx context.Context, id uint64) (*models.User, 
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.User, error) {
 	u := &models.User{}
 	err := r.db.QueryRowContext(ctx,
-		"SELECT id, email, username, password_hash, created_at FROM users WHERE email = ?", email,
-	).Scan(&u.ID, &u.Email, &u.Username, &u.PasswordHash, &u.CreatedAt)
+		"SELECT id, email, name, password_hash, created_at FROM users WHERE email = ?", email,
+	).Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
+	}
+	if err == nil {
+		u.Username = u.Name
 	}
 	return u, err
 }

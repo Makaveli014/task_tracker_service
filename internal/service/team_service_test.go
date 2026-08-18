@@ -94,13 +94,13 @@ func TestInvite_Success(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "description", "created_by", "created_at"}).
 			AddRow(1, "Team A", "Desc", 1, testTime))
 
-	mock.ExpectQuery("SELECT COUNT").
+	mock.ExpectQuery("SELECT role FROM team_members WHERE team_id").
 		WithArgs(uint64(1), uint64(3)).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+		WillReturnRows(sqlmock.NewRows([]string{"role"}))
 
-	mock.ExpectQuery("SELECT id, email, username, password_hash, created_at FROM users WHERE id").
+	mock.ExpectQuery("SELECT id, email, name, password_hash, created_at FROM users WHERE id").
 		WithArgs(uint64(3)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "username", "password_hash", "created_at"}).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "created_at"}).
 			AddRow(3, "user3@test.com", "user3", "hash", testTime))
 
 	mock.ExpectExec("INSERT INTO team_members").
@@ -127,9 +127,9 @@ func TestInvite_AlreadyMember(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "description", "created_by", "created_at"}).
 			AddRow(1, "Team A", "Desc", 1, testTime))
 
-	mock.ExpectQuery("SELECT COUNT").
+	mock.ExpectQuery("SELECT role FROM team_members WHERE team_id").
 		WithArgs(uint64(1), uint64(3)).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("member"))
 
 	err := svc.Invite(context.Background(), 1, 1, &models.InviteRequest{
 		UserID: 3,

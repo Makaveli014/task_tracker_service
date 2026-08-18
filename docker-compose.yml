@@ -1,18 +1,16 @@
-version: "3.8"
-
 services:
   mysql:
     image: mysql:8.0
     environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: taskmanager
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-me}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-taskmanager}
     ports:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./migrations:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD:-change-me}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -30,7 +28,7 @@ services:
   app:
     build: .
     ports:
-      - "8080:8080"
+      - "${SERVER_PORT:-8080}:8080"
     depends_on:
       mysql:
         condition: service_healthy
@@ -40,11 +38,12 @@ services:
       DB_HOST: mysql
       DB_PORT: "3306"
       DB_USER: root
-      DB_PASSWORD: password
-      DB_NAME: taskmanager
-      REDIS_ADDR: "redis:6379"
-      JWT_SECRET: "super-secret-key-change-in-production"
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-me}
+      DB_NAME: ${MYSQL_DATABASE:-taskmanager}
+      REDIS_ADDR: redis:6379
+      JWT_SECRET: ${JWT_SECRET:-change-me-to-a-long-random-secret}
       SERVER_PORT: "8080"
+      RATE_LIMIT: ${RATE_LIMIT:-100}
 
 volumes:
   mysql_data:

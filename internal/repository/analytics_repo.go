@@ -3,105 +3,47 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 
 	"TestTask_Bazis/internal/models"
 )
 
-type AnalyticsRepository struct {
-	db *sql.DB
-}
+type AnalyticsRepository struct{ db *sql.DB }
 
-func NewAnalyticsRepository(db *sql.DB) *AnalyticsRepository {
-	return &AnalyticsRepository{db: db}
-}
+func NewAnalyticsRepository(db *sql.DB) *AnalyticsRepository { return &AnalyticsRepository{db: db} }
 
-// TeamStats — для каждой команды: название, кол-во участников, кол-во задач done за 7 дней
-func (r *AnalyticsRepository) TeamStats(ctx context.Context) ([]models.TeamStats, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT
-			t.name,
-			COUNT(DISTINCT tm.user_id) AS member_count,
-			COUNT(DISTINCT CASE
-				WHEN tk.status = 'done' AND tk.updated_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-				THEN tk.id
-			END) AS done_tasks_week
-		FROM teams t
-		LEFT JOIN team_members tm ON tm.team_id = t.id
-		LEFT JOIN tasks tk ON tk.team_id = t.id
-		GROUP BY t.id, t.name
-		ORDER BY t.name`)
-	if err != nil {
+func (r *AnalyticsRepository) TeamStats(ctx context.Context, teamID uint64) (*models.TeamStats, error) {
+	const query = `WITH status_counts AS (
+		SELECT status, COUNT(*) count FROM tasks WHERE team_id = ? GROUP BY status
+	), top_assignees AS (
+		SELECT tk.assignee_id user_id, u.name, COUNT(*) closed_tasks
+		FROM tasks tk JOIN users u ON u.id = tk.assignee_id
+		WHERE tk.team_id = ? AND tk.status = 'done' AND tk.closed_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+		GROUP BY tk.assignee_id, u.name ORDER BY closed_tasks DESC, tk.assignee_id LIMIT 3
+	), summary AS (
+		SELECT AVG(TIMESTAMPDIFF(SECOND, created_at, closed_at)) average_seconds
+		FROM tasks WHERE team_id = ? AND closed_at IS NOT NULL
+	), comments AS (
+		SELECT COUNT(tc.id) comment_count FROM tasks tk LEFT JOIN task_comments tc ON tc.task_id = tk.id WHERE tk.team_id = ?
+	)
+	SELECT
+		COALESCE((SELECT JSON_OBJECTAGG(status, count) FROM status_counts), JSON_OBJECT()),
+		COALESCE((SELECT JSON_ARRAYAGG(JSON_OBJECT('user_id', user_id, 'name', name, 'closed_tasks', closed_tasks)) FROM top_assignees), JSON_ARRAY()),
+		(SELECT average_seconds FROM summary), (SELECT comment_count FROM comments)`
+	var statusesJSON, assigneesJSON []byte
+	var average sql.NullFloat64
+	stats := &models.TeamStats{TeamID: teamID}
+	if err := r.db.QueryRowContext(ctx, query, teamID, teamID, teamID, teamID).Scan(&statusesJSON, &assigneesJSON, &average, &stats.CommentCount); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var stats []models.TeamStats
-	for rows.Next() {
-		var s models.TeamStats
-		if err := rows.Scan(&s.TeamName, &s.MemberCount, &s.DoneTasksWeek); err != nil {
-			return nil, err
-		}
-		stats = append(stats, s)
-	}
-	return stats, rows.Err()
-}
-
-// TopCreators — топ-3 пользователя по созданным задачам в каждой команде за месяц (оконная функция)
-func (r *AnalyticsRepository) TopCreators(ctx context.Context) ([]models.TopCreator, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		WITH ranked AS (
-			SELECT
-				tk.team_id,
-				t.name AS team_name,
-				u.username,
-				COUNT(*) AS task_count,
-				ROW_NUMBER() OVER (PARTITION BY tk.team_id ORDER BY COUNT(*) DESC) AS rn
-			FROM tasks tk
-			JOIN teams t ON t.id = tk.team_id
-			JOIN users u ON u.id = tk.created_by
-			WHERE tk.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)
-			GROUP BY tk.team_id, t.name, u.id, u.username
-		)
-		SELECT team_name, username, task_count
-		FROM ranked
-		WHERE rn <= 3
-		ORDER BY team_name, task_count DESC`)
-	if err != nil {
+	if err := json.Unmarshal(statusesJSON, &stats.TasksByStatus); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var creators []models.TopCreator
-	for rows.Next() {
-		var c models.TopCreator
-		if err := rows.Scan(&c.TeamName, &c.Username, &c.TaskCount); err != nil {
-			return nil, err
-		}
-		creators = append(creators, c)
-	}
-	return creators, rows.Err()
-}
-
-// IntegrityViolations — задачи, где assignee не является членом команды
-func (r *AnalyticsRepository) IntegrityViolations(ctx context.Context) ([]models.IntegrityViolation, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT tk.id, tk.title, tk.assignee_id, tk.team_id, u.username
-		FROM tasks tk
-		JOIN users u ON u.id = tk.assignee_id
-		LEFT JOIN team_members tm ON tm.team_id = tk.team_id AND tm.user_id = tk.assignee_id
-		WHERE tk.assignee_id IS NOT NULL AND tm.id IS NULL`)
-	if err != nil {
+	if err := json.Unmarshal(assigneesJSON, &stats.TopAssignees); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var violations []models.IntegrityViolation
-	for rows.Next() {
-		var v models.IntegrityViolation
-		if err := rows.Scan(&v.TaskID, &v.Title, &v.AssigneeID, &v.TeamID, &v.AssigneeName); err != nil {
-			return nil, err
-		}
-		violations = append(violations, v)
+	if average.Valid {
+		stats.AverageClosingTimeSeconds = &average.Float64
 	}
-	return violations, rows.Err()
+	return stats, nil
 }

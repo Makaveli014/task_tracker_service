@@ -23,8 +23,11 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Email == "" || req.Username == "" || req.Password == "" {
-		writeError(w, http.StatusBadRequest, "email, username, and password are required")
+	if req.Name == "" {
+		req.Name = req.Username
+	}
+	if req.Email == "" || req.Name == "" || req.Password == "" {
+		writeError(w, http.StatusBadRequest, "email, name, and password are required")
 		return
 	}
 

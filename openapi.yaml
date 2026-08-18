@@ -1,0 +1,97 @@
+openapi: 3.0.3
+info:
+  title: Team Task Management API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080/api/v1
+security:
+  - bearerAuth: []
+paths:
+  /register:
+    post:
+      security: []
+      summary: Register user
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RegisterRequest'}}}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/User'}}}}, '400': {$ref: '#/components/responses/BadRequest'}, '409': {$ref: '#/components/responses/Conflict'}}
+  /login:
+    post:
+      security: []
+      summary: Login
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/LoginRequest'}}}}
+      responses: {'200': {description: JWT and user}, '401': {$ref: '#/components/responses/Unauthorized'}}
+  /teams:
+    get:
+      summary: List current user teams
+      responses: {'200': {description: Teams}}
+    post:
+      summary: Create team
+      responses: {'201': {description: Team created}}
+  /teams/{id}/invite:
+    post:
+      summary: Invite member (owner/admin)
+      parameters: [{$ref: '#/components/parameters/TeamID'}]
+      responses: {'200': {description: Invited}, '403': {$ref: '#/components/responses/Forbidden'}}
+  /teams/{id}/members/{user_id}/role:
+    put:
+      summary: Change member role (owner only)
+      parameters: [{$ref: '#/components/parameters/TeamID'}, {name: user_id, in: path, required: true, schema: {type: integer, format: int64}}]
+      responses: {'200': {description: Updated}, '403': {$ref: '#/components/responses/Forbidden'}}
+  /tasks:
+    post:
+      summary: Create task
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateTaskRequest'}}}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Task'}}}}, '403': {$ref: '#/components/responses/Forbidden'}}
+    get:
+      summary: List team tasks
+      parameters:
+        - {name: team_id, in: query, required: true, schema: {type: integer, format: int64}}
+        - {name: status, in: query, schema: {type: string, enum: [todo, in_progress, done]}}
+        - {name: assignee_id, in: query, schema: {type: integer, format: int64}}
+        - {name: limit, in: query, schema: {type: integer, default: 20, maximum: 100}}
+        - {name: offset, in: query, schema: {type: integer, default: 0}}
+      responses: {'200': {description: Paginated tasks}, '403': {$ref: '#/components/responses/Forbidden'}}
+  /tasks/{id}:
+    put:
+      summary: Update task with optimistic locking
+      parameters: [{$ref: '#/components/parameters/TaskID'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateTaskRequest'}}}}
+      responses: {'200': {description: Updated task}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}
+  /tasks/{id}/history:
+    get:
+      summary: Task history for team members
+      parameters: [{$ref: '#/components/parameters/TaskID'}]
+      responses: {'200': {description: History}, '403': {$ref: '#/components/responses/Forbidden'}}
+  /tasks/{id}/comments:
+    get:
+      summary: List task comments
+      parameters: [{$ref: '#/components/parameters/TaskID'}]
+      responses: {'200': {description: Comments}, '403': {$ref: '#/components/responses/Forbidden'}}
+    post:
+      summary: Add task comment
+      parameters: [{$ref: '#/components/parameters/TaskID'}]
+      responses: {'201': {description: Created}, '403': {$ref: '#/components/responses/Forbidden'}}
+  /teams/{team_id}/stats:
+    get:
+      summary: Team analytics (owner/admin)
+      parameters: [{name: team_id, in: path, required: true, schema: {type: integer, format: int64}}]
+      responses: {'200': {description: Team statistics, content: {application/json: {schema: {$ref: '#/components/schemas/TeamStats'}}}}, '403': {$ref: '#/components/responses/Forbidden'}}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+  parameters:
+    TeamID: {name: id, in: path, required: true, schema: {type: integer, format: int64}}
+    TaskID: {name: id, in: path, required: true, schema: {type: integer, format: int64}}
+  responses:
+    BadRequest: {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    Unauthorized: {description: Invalid credentials or token, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    Forbidden: {description: Insufficient permissions, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    Conflict: {description: Duplicate resource or stale task version, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  schemas:
+    Error: {type: object, required: [error], properties: {error: {type: string}}}
+    RegisterRequest: {type: object, required: [email, name, password], properties: {email: {type: string, format: email}, name: {type: string}, password: {type: string, format: password}}}
+    LoginRequest: {type: object, required: [email, password], properties: {email: {type: string, format: email}, password: {type: string, format: password}}}
+    User: {type: object, properties: {id: {type: integer}, email: {type: string}, name: {type: string}, created_at: {type: string, format: date-time}}}
+    CreateTaskRequest: {type: object, required: [team_id, title], properties: {team_id: {type: integer}, title: {type: string}, description: {type: string}, status: {type: string}, assignee_id: {type: integer, nullable: true}}}
+    UpdateTaskRequest: {type: object, required: [version], properties: {title: {type: string}, description: {type: string}, status: {type: string}, assignee_id: {type: integer}, version: {type: integer, minimum: 1}}}
+    Task: {type: object, properties: {id: {type: integer}, team_id: {type: integer}, title: {type: string}, description: {type: string}, status: {type: string}, created_by: {type: integer}, assignee_id: {type: integer, nullable: true}, created_at: {type: string, format: date-time}, updated_at: {type: string, format: date-time}, closed_at: {type: string, format: date-time, nullable: true}, version: {type: integer}}}
+    TeamStats: {type: object, properties: {team_id: {type: integer}, tasks_by_status: {type: object, additionalProperties: {type: integer}}, top_assignees: {type: array, items: {type: object, properties: {user_id: {type: integer}, name: {type: string}, closed_tasks: {type: integer}}}}, average_closing_time_seconds: {type: number, nullable: true}, comment_count: {type: integer}}}

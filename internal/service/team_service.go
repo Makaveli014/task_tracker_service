@@ -22,12 +22,10 @@ type TeamService struct {
 }
 
 func NewTeamService(teamRepo *repository.TeamRepository, userRepo *repository.UserRepository, emailSvc *EmailService) *TeamService {
-	return &TeamService{
-		teamRepo: teamRepo,
-		userRepo: userRepo,
-		emailSvc: emailSvc,
-	}
+	return &TeamService{teamRepo: teamRepo, userRepo: userRepo, emailSvc: emailSvc}
 }
+
+func (s *TeamService) Repository() *repository.TeamRepository { return s.teamRepo }
 
 func (s *TeamService) Create(ctx context.Context, req *models.CreateTeamRequest, userID uint64) (*models.Team, error) {
 	team, err := s.teamRepo.Create(ctx, req.Name, req.Description, userID)
@@ -74,6 +72,9 @@ func (s *TeamService) Invite(ctx context.Context, teamID uint64, inviterID uint6
 	if inviteRole == "" {
 		inviteRole = "member"
 	}
+	if inviteRole != "member" && inviteRole != "admin" {
+		return errors.New("invalid invite role")
+	}
 
 	user, err := s.userRepo.GetByID(ctx, req.UserID)
 	if err != nil {
@@ -92,5 +93,34 @@ func (s *TeamService) Invite(ctx context.Context, teamID uint64, inviterID uint6
 		_ = s.emailSvc.SendInvite(ctx, user.Email, team.Name)
 	}
 
+	return nil
+}
+
+func (s *TeamService) UpdateMemberRole(ctx context.Context, teamID, actorID, userID uint64, newRole string) error {
+	actorRole, err := s.teamRepo.GetMemberRole(ctx, teamID, actorID)
+	if err != nil {
+		return fmt.Errorf("get actor role: %w", err)
+	}
+	if actorRole != "owner" {
+		return ErrNotAuthorized
+	}
+	if newRole != "member" && newRole != "admin" {
+		return errors.New("invalid role")
+	}
+
+	targetRole, err := s.teamRepo.GetMemberRole(ctx, teamID, userID)
+	if err != nil {
+		return fmt.Errorf("get target role: %w", err)
+	}
+	if targetRole == "" {
+		return errors.New("team member not found")
+	}
+	if targetRole == "owner" {
+		return ErrNotAuthorized
+	}
+
+	if err := s.teamRepo.UpdateMemberRole(ctx, teamID, userID, newRole); err != nil {
+		return fmt.Errorf("update member role: %w", err)
+	}
 	return nil
 }

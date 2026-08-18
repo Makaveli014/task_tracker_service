@@ -29,13 +29,15 @@ func (r *TeamRepository) Create(ctx context.Context, name, description string, c
 	if err != nil {
 		return nil, err
 	}
-	teamID, _ := res.LastInsertId()
+	teamID, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
 
-	_, err = tx.ExecContext(ctx,
+	if _, err = tx.ExecContext(ctx,
 		"INSERT INTO team_members (team_id, user_id, role) VALUES (?, ?, 'owner')",
 		teamID, createdBy,
-	)
-	if err != nil {
+	); err != nil {
 		return nil, err
 	}
 
@@ -81,10 +83,28 @@ func (r *TeamRepository) GetByUserID(ctx context.Context, userID uint64) ([]mode
 
 func (r *TeamRepository) AddMember(ctx context.Context, teamID, userID uint64, role string) error {
 	_, err := r.db.ExecContext(ctx,
-		"INSERT INTO team_members (team_id, user_id, role) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE role = VALUES(role)",
+		"INSERT INTO team_members (team_id, user_id, role) VALUES (?, ?, ?)",
 		teamID, userID, role,
 	)
 	return err
+}
+
+func (r *TeamRepository) UpdateMemberRole(ctx context.Context, teamID, userID uint64, role string) error {
+	result, err := r.db.ExecContext(ctx,
+		"UPDATE team_members SET role = ? WHERE team_id = ? AND user_id = ? AND role <> 'owner'",
+		role, teamID, userID,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (r *TeamRepository) GetMemberRole(ctx context.Context, teamID, userID uint64) (string, error) {
@@ -99,9 +119,6 @@ func (r *TeamRepository) GetMemberRole(ctx context.Context, teamID, userID uint6
 }
 
 func (r *TeamRepository) IsMember(ctx context.Context, teamID, userID uint64) (bool, error) {
-	var count int
-	err := r.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM team_members WHERE team_id = ? AND user_id = ?", teamID, userID,
-	).Scan(&count)
-	return count > 0, err
+	role, err := r.GetMemberRole(ctx, teamID, userID)
+	return role != "", err
 }

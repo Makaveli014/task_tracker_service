@@ -30,41 +30,41 @@ func TestRegister_Success(t *testing.T) {
 	svc, mock := setupAuthTest(t)
 
 	// GetByEmail: no user found
-	mock.ExpectQuery("SELECT id, email, username, password_hash, created_at FROM users WHERE email").
+	mock.ExpectQuery("SELECT id, email, name, password_hash, created_at FROM users WHERE email").
 		WithArgs("test@test.com").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "username", "password_hash", "created_at"}))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "created_at"}))
 
 	mock.ExpectExec("INSERT INTO users").
 		WithArgs("test@test.com", "testuser", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	mock.ExpectQuery("SELECT id, email, username, password_hash, created_at FROM users WHERE id").
+	mock.ExpectQuery("SELECT id, email, name, password_hash, created_at FROM users WHERE id").
 		WithArgs(uint64(1)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "username", "password_hash", "created_at"}).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "created_at"}).
 			AddRow(1, "test@test.com", "testuser", "hash", testTime))
 
 	user, err := svc.Register(context.Background(), &models.RegisterRequest{
 		Email:    "test@test.com",
-		Username: "testuser",
+		Name:     "testuser",
 		Password: "password123",
 	})
 
 	require.NoError(t, err)
 	assert.Equal(t, "test@test.com", user.Email)
-	assert.Equal(t, "testuser", user.Username)
+	assert.Equal(t, "testuser", user.Name)
 }
 
 func TestRegister_EmailTaken(t *testing.T) {
 	svc, mock := setupAuthTest(t)
 
-	mock.ExpectQuery("SELECT id, email, username, password_hash, created_at FROM users WHERE email").
+	mock.ExpectQuery("SELECT id, email, name, password_hash, created_at FROM users WHERE email").
 		WithArgs("existing@test.com").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "username", "password_hash", "created_at"}).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "created_at"}).
 			AddRow(1, "existing@test.com", "user1", "hash", testTime))
 
 	_, err := svc.Register(context.Background(), &models.RegisterRequest{
 		Email:    "existing@test.com",
-		Username: "user2",
+		Name:     "user2",
 		Password: "password123",
 	})
 
@@ -82,9 +82,9 @@ func TestLogin_Success(t *testing.T) {
 	hashBytes, err := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.MinCost)
 	require.NoError(t, err)
 
-	mock.ExpectQuery("SELECT id, email, username, password_hash, created_at FROM users WHERE email").
+	mock.ExpectQuery("SELECT id, email, name, password_hash, created_at FROM users WHERE email").
 		WithArgs("test@test.com").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "username", "password_hash", "created_at"}).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "created_at"}).
 			AddRow(1, "test@test.com", "testuser", string(hashBytes), testTime))
 
 	token, user, err := svc.Login(context.Background(), &models.LoginRequest{
@@ -99,9 +99,9 @@ func TestLogin_Success(t *testing.T) {
 func TestLogin_UserNotFound(t *testing.T) {
 	svc, mock := setupAuthTest(t)
 
-	mock.ExpectQuery("SELECT id, email, username, password_hash, created_at FROM users WHERE email").
+	mock.ExpectQuery("SELECT id, email, name, password_hash, created_at FROM users WHERE email").
 		WithArgs("notfound@test.com").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "username", "password_hash", "created_at"}))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "created_at"}))
 
 	_, _, err := svc.Login(context.Background(), &models.LoginRequest{
 		Email:    "notfound@test.com",

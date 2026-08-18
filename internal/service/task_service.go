@@ -15,32 +15,38 @@ type TaskService struct {
 }
 
 func NewTaskService(taskRepo *repository.TaskRepository, teamRepo *repository.TeamRepository) *TaskService {
-	return &TaskService{
-		taskRepo: taskRepo,
-		teamRepo: teamRepo,
-	}
+	return &TaskService{taskRepo: taskRepo, teamRepo: teamRepo}
 }
 
+func (s *TaskService) member(ctx context.Context, teamID, userID uint64) (string, error) {
+	role, err := s.teamRepo.GetMemberRole(ctx, teamID, userID)
+	if err != nil {
+		return "", err
+	}
+	if role == "" {
+		return "", ErrNotAuthorized
+	}
+	return role, nil
+}
+func (s *TaskService) CheckTeamAccess(ctx context.Context, teamID, userID uint64) error {
+	_, err := s.member(ctx, teamID, userID)
+	return err
+}
 func (s *TaskService) Create(ctx context.Context, req *models.CreateTaskRequest, userID uint64) (*models.Task, error) {
-	isMember, err := s.teamRepo.IsMember(ctx, req.TeamID, userID)
-	if err != nil {
-		return nil, fmt.Errorf("check membership: %w", err)
+	if _, err := s.member(ctx, req.TeamID, userID); err != nil {
+		return nil, err
 	}
-	if !isMember {
-		return nil, ErrNotAuthorized
+	if req.AssigneeID != nil {
+		if _, err := s.member(ctx, req.TeamID, *req.AssigneeID); err != nil {
+			return nil, errors.New("assignee must be a team member")
+		}
 	}
-
-	task, err := s.taskRepo.Create(ctx, req, userID)
-	if err != nil {
-		return nil, fmt.Errorf("create task: %w", err)
-	}
-	return task, nil
+	return s.taskRepo.Create(ctx, req, userID)
 }
-
 func (s *TaskService) GetByID(ctx context.Context, id uint64) (*models.Task, error) {
 	task, err := s.taskRepo.GetByID(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("get task: %w", err)
+		return nil, err
 	}
 	if task == nil {
 		return nil, errors.New("task not found")
@@ -48,112 +54,108 @@ func (s *TaskService) GetByID(ctx context.Context, id uint64) (*models.Task, err
 	return task, nil
 }
 
-func (s *TaskService) Update(ctx context.Context, id uint64, req *models.UpdateTaskRequest, userID uint64) (*models.Task, error) {
-	task, err := s.taskRepo.GetByID(ctx, id)
+func (s *TaskService) Update(ctx context.Context, id, userID uint64, req *models.UpdateTaskRequest) (*models.Task, error) {
+	task, err := s.GetByID(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("get task: %w", err)
+		return nil, err
 	}
-	if task == nil {
-		return nil, errors.New("task not found")
-	}
-
-	// Проверка прав: создатель задачи или admin/owner команды
-	isMember, err := s.teamRepo.IsMember(ctx, task.TeamID, userID)
+	role, err := s.member(ctx, task.TeamID, userID)
 	if err != nil {
-		return nil, fmt.Errorf("check membership: %w", err)
+		return nil, err
 	}
-	if !isMember {
+	isPrivileged := role == "owner" || role == "admin"
+	isCreator := task.CreatedBy == userID
+	isAssignee := task.AssigneeID != nil && *task.AssigneeID == userID
+	if !isPrivileged && !isCreator && !isAssignee {
 		return nil, ErrNotAuthorized
 	}
-
-	role, _ := s.teamRepo.GetMemberRole(ctx, task.TeamID, userID)
-	if task.CreatedBy != userID && role != "admin" && role != "owner" {
-		return nil, ErrNotAuthorized
-	}
-
-	updates := make(map[string]any)
-	if req.Title != nil {
-		updates["title"] = *req.Title
-	}
-	if req.Description != nil {
-		updates["description"] = *req.Description
-	}
-	if req.Status != nil {
-		updates["status"] = *req.Status
-	}
-	if req.Priority != nil {
-		updates["priority"] = *req.Priority
-	}
-	if req.AssigneeID != nil {
-		updates["assignee_id"] = *req.AssigneeID
-	}
-
-	// Записать историю изменений
-	for field, newVal := range updates {
-		oldVal := getFieldValue(task, field)
-		newValStr := fmt.Sprintf("%v", newVal)
-		if oldVal != newValStr {
-			_ = s.taskRepo.AddHistory(ctx, id, userID, field, oldVal, newValStr)
+	updates := map[string]any{}
+	changes := map[string]map[string]string{}
+	add := func(field string, value any, old string) {
+		newValue := fmt.Sprintf("%v", value)
+		if old != newValue {
+			updates[field] = value
+			changes[field] = map[string]string{"old": old, "new": newValue}
 		}
 	}
-
-	updated, err := s.taskRepo.Update(ctx, id, updates)
+	if req.Title != nil {
+		if !isPrivileged && !isCreator {
+			return nil, ErrNotAuthorized
+		}
+		add("title", *req.Title, task.Title)
+	}
+	if req.Description != nil {
+		if !isPrivileged && !isCreator {
+			return nil, ErrNotAuthorized
+		}
+		add("description", *req.Description, task.Description)
+	}
+	if req.Priority != nil {
+		if !isPrivileged {
+			return nil, ErrNotAuthorized
+		}
+		add("priority", *req.Priority, task.Priority)
+	}
+	if req.AssigneeID != nil {
+		if !isPrivileged && !isCreator {
+			return nil, ErrNotAuthorized
+		}
+		if _, err := s.member(ctx, task.TeamID, *req.AssigneeID); err != nil {
+			return nil, errors.New("assignee must be a team member")
+		}
+		add("assignee_id", *req.AssigneeID, fmt.Sprintf("%v", task.AssigneeID))
+	}
+	if req.Status != nil {
+		if !isPrivileged && !isCreator && !isAssignee {
+			return nil, ErrNotAuthorized
+		}
+		add("status", *req.Status, task.Status)
+	}
+	if len(updates) == 0 {
+		return task, nil
+	}
+	return s.taskRepo.UpdateWithHistory(ctx, id, userID, req.Version, updates, changes)
+}
+func (s *TaskService) List(ctx context.Context, teamID, userID uint64, status string, assigneeID *uint64, limit, offset int) ([]models.Task, int, error) {
+	if _, err := s.member(ctx, teamID, userID); err != nil {
+		return nil, 0, err
+	}
+	return s.taskRepo.List(ctx, teamID, status, assigneeID, limit, offset)
+}
+func (s *TaskService) GetHistory(ctx context.Context, taskID, userID uint64) ([]models.TaskHistory, error) {
+	task, err := s.GetByID(ctx, taskID)
 	if err != nil {
-		return nil, fmt.Errorf("update task: %w", err)
+		return nil, err
 	}
-	return updated, nil
-}
-
-func (s *TaskService) List(ctx context.Context, teamID uint64, status string, assigneeID *uint64, page, perPage int) ([]models.Task, int, error) {
-	if page < 1 {
-		page = 1
+	if _, err = s.member(ctx, task.TeamID, userID); err != nil {
+		return nil, err
 	}
-	if perPage < 1 || perPage > 100 {
-		perPage = 20
-	}
-	offset := (page - 1) * perPage
-	return s.taskRepo.List(ctx, teamID, status, assigneeID, perPage, offset)
-}
-
-func (s *TaskService) GetHistory(ctx context.Context, taskID uint64) ([]models.TaskHistory, error) {
 	return s.taskRepo.GetHistory(ctx, taskID)
 }
-
 func (s *TaskService) AddComment(ctx context.Context, taskID, userID uint64, content string) (*models.TaskComment, error) {
+	task, err := s.GetByID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = s.member(ctx, task.TeamID, userID); err != nil {
+		return nil, err
+	}
 	return s.taskRepo.AddComment(ctx, taskID, userID, content)
 }
-
-func (s *TaskService) GetComments(ctx context.Context, taskID uint64) ([]models.TaskComment, error) {
+func (s *TaskService) GetComments(ctx context.Context, taskID, userID uint64) ([]models.TaskComment, error) {
+	task, err := s.GetByID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = s.member(ctx, task.TeamID, userID); err != nil {
+		return nil, err
+	}
 	return s.taskRepo.GetComments(ctx, taskID)
 }
-
 func (s *TaskService) GetTeamID(ctx context.Context, taskID uint64) (uint64, error) {
-	task, err := s.taskRepo.GetByID(ctx, taskID)
+	task, err := s.GetByID(ctx, taskID)
 	if err != nil {
 		return 0, err
 	}
-	if task == nil {
-		return 0, errors.New("task not found")
-	}
 	return task.TeamID, nil
 }
-
-func getFieldValue(task *models.Task, field string) string {
-	switch field {
-	case "title":
-		return task.Title
-	case "description":
-		return task.Description
-	case "status":
-		return task.Status
-	case "priority":
-		return task.Priority
-	case "assignee_id":
-		if task.AssigneeID != nil {
-			return fmt.Sprintf("%d", *task.AssigneeID)
-		}
-		return ""
-	}
-	return ""
-}
-

@@ -14,9 +14,9 @@ import (
 )
 
 var (
-	ErrEmailTaken    = errors.New("email already taken")
-	ErrInvalidCreds  = errors.New("invalid credentials")
-	ErrInvalidToken  = errors.New("invalid token")
+	ErrEmailTaken   = errors.New("email already taken")
+	ErrInvalidCreds = errors.New("invalid credentials")
+	ErrInvalidToken = errors.New("invalid token")
 )
 
 type AuthService struct {
@@ -47,7 +47,11 @@ func (s *AuthService) Register(ctx context.Context, req *models.RegisterRequest)
 		return nil, fmt.Errorf("hash password: %w", err)
 	}
 
-	user, err := s.userRepo.Create(ctx, req.Email, req.Username, string(hash))
+	name := req.Name
+	if name == "" {
+		name = req.Username
+	}
+	user, err := s.userRepo.Create(ctx, req.Email, name, string(hash))
 	if err != nil {
 		return nil, fmt.Errorf("create user: %w", err)
 	}

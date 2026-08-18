@@ -31,7 +31,7 @@ func SetupRouter(
 	authHandler := NewAuthHandler(authSvc)
 	teamHandler := NewTeamHandler(teamSvc)
 	taskHandler := NewTaskHandler(taskSvc, redisClient)
-	analyticsHandler := NewAnalyticsHandler(analyticsRepo)
+	analyticsHandler := NewAnalyticsHandler(analyticsRepo, teamSvc.Repository())
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/register", authHandler.Register)
@@ -44,6 +44,7 @@ func SetupRouter(
 			r.Post("/teams", teamHandler.Create)
 			r.Get("/teams", teamHandler.List)
 			r.Post("/teams/{id}/invite", teamHandler.Invite)
+			r.Put("/teams/{id}/members/{user_id}/role", teamHandler.UpdateRole)
 
 			r.Post("/tasks", taskHandler.Create)
 			r.Get("/tasks", taskHandler.List)
@@ -52,9 +53,7 @@ func SetupRouter(
 			r.Post("/tasks/{id}/comments", taskHandler.AddComment)
 			r.Get("/tasks/{id}/comments", taskHandler.GetComments)
 
-			r.Get("/analytics/team-stats", analyticsHandler.TeamStats)
-			r.Get("/analytics/top-creators", analyticsHandler.TopCreators)
-			r.Get("/analytics/integrity-check", analyticsHandler.IntegrityCheck)
+			r.Get("/teams/{team_id}/stats", analyticsHandler.TeamStats)
 		})
 	})
 

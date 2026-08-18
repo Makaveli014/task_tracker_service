@@ -177,7 +177,7 @@ func TestIntegration_RegisterAndLogin(t *testing.T) {
 	// Register
 	resp := doRequest(t, "POST", env.server.URL+"/api/v1/register", models.RegisterRequest{
 		Email:    "user@test.com",
-		Username: "testuser",
+		Name:     "testuser",
 		Password: "password123",
 	}, "")
 	assert.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -189,7 +189,7 @@ func TestIntegration_RegisterAndLogin(t *testing.T) {
 	// Register duplicate
 	resp2 := doRequest(t, "POST", env.server.URL+"/api/v1/register", models.RegisterRequest{
 		Email:    "user@test.com",
-		Username: "testuser2",
+		Name:     "testuser2",
 		Password: "password123",
 	}, "")
 	assert.Equal(t, http.StatusConflict, resp2.StatusCode)
@@ -212,7 +212,7 @@ func TestIntegration_FullWorkflow(t *testing.T) {
 
 	// Register user1
 	resp := doRequest(t, "POST", env.server.URL+"/api/v1/register", models.RegisterRequest{
-		Email: "user1@test.com", Username: "user1", Password: "pass123",
+		Email: "user1@test.com", Name: "user1", Password: "pass123",
 	}, "")
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	resp.Body.Close()
@@ -227,7 +227,7 @@ func TestIntegration_FullWorkflow(t *testing.T) {
 
 	// Register user2
 	resp = doRequest(t, "POST", env.server.URL+"/api/v1/register", models.RegisterRequest{
-		Email: "user2@test.com", Username: "user2", Password: "pass123",
+		Email: "user2@test.com", Name: "user2", Password: "pass123",
 	}, "")
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	resp.Body.Close()
@@ -241,6 +241,13 @@ func TestIntegration_FullWorkflow(t *testing.T) {
 
 	token1 := auth1.Token
 	token2 := auth2.Token
+
+	resp = doRequest(t, "POST", env.server.URL+"/api/v1/register", models.RegisterRequest{Email: "outsider@test.com", Name: "outsider", Password: "pass123"}, "")
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	resp.Body.Close()
+	resp = doRequest(t, "POST", env.server.URL+"/api/v1/login", models.LoginRequest{Email: "outsider@test.com", Password: "pass123"}, "")
+	var outsider models.AuthResponse
+	parseJSON(t, resp, &outsider)
 
 	// Create team
 	resp = doRequest(t, "POST", env.server.URL+"/api/v1/teams", models.CreateTeamRequest{
@@ -286,12 +293,18 @@ func TestIntegration_FullWorkflow(t *testing.T) {
 	// Update task
 	newStatus := "in_progress"
 	resp = doRequest(t, "PUT", fmt.Sprintf("%s/api/v1/tasks/%d", env.server.URL, taskID), models.UpdateTaskRequest{
-		Status: &newStatus,
+		Status: &newStatus, Version: task.Version,
 	}, token1)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	var updatedTask models.Task
 	parseJSON(t, resp, &updatedTask)
 	assert.Equal(t, "in_progress", updatedTask.Status)
+	assert.Equal(t, task.Version+1, updatedTask.Version)
+
+	staleTitle := "stale update"
+	resp = doRequest(t, "PUT", fmt.Sprintf("%s/api/v1/tasks/%d", env.server.URL, taskID), models.UpdateTaskRequest{Title: &staleTitle, Version: task.Version}, token1)
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+	resp.Body.Close()
 
 	// Get task history
 	resp = doRequest(t, "GET", fmt.Sprintf("%s/api/v1/tasks/%d/history", env.server.URL, taskID), nil, token1)
@@ -314,6 +327,16 @@ func TestIntegration_FullWorkflow(t *testing.T) {
 	parseJSON(t, resp, &comments)
 	assert.Len(t, comments, 1)
 	assert.Equal(t, "Working on it!", comments[0].Content)
+
+	for _, url := range []string{
+		fmt.Sprintf("%s/api/v1/tasks?team_id=%d", env.server.URL, teamID),
+		fmt.Sprintf("%s/api/v1/tasks/%d/history", env.server.URL, taskID),
+		fmt.Sprintf("%s/api/v1/tasks/%d/comments", env.server.URL, taskID),
+	} {
+		resp = doRequest(t, "GET", url, nil, outsider.Token)
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+		resp.Body.Close()
+	}
 }
 
 func TestIntegration_UnauthorizedAccess(t *testing.T) {
@@ -330,34 +353,43 @@ func TestIntegration_UnauthorizedAccess(t *testing.T) {
 	resp.Body.Close()
 }
 
-func TestIntegration_Analytics(t *testing.T) {
+func TestIntegration_TeamStats(t *testing.T) {
 	env := setupIntegration(t)
 
-	// Register + login
-	resp := doRequest(t, "POST", env.server.URL+"/api/v1/register", models.RegisterRequest{
-		Email: "admin@test.com", Username: "admin", Password: "pass123",
-	}, "")
-	resp.Body.Close()
-
-	resp = doRequest(t, "POST", env.server.URL+"/api/v1/login", models.LoginRequest{
-		Email: "admin@test.com", Password: "pass123",
-	}, "")
+	resp := doRequest(t, "POST", env.server.URL+"/api/v1/register", models.RegisterRequest{Email: "owner@test.com", Name: "owner", Password: "pass123"}, "")
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var owner models.User
+	parseJSON(t, resp, &owner)
+	resp = doRequest(t, "POST", env.server.URL+"/api/v1/login", models.LoginRequest{Email: owner.Email, Password: "pass123"}, "")
 	var auth models.AuthResponse
 	parseJSON(t, resp, &auth)
 
-	// Team stats (empty is ok)
-	resp = doRequest(t, "GET", env.server.URL+"/api/v1/analytics/team-stats", nil, auth.Token)
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	resp.Body.Close()
+	resp = doRequest(t, "POST", env.server.URL+"/api/v1/teams", models.CreateTeamRequest{Name: "Stats Team"}, auth.Token)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var team models.Team
+	parseJSON(t, resp, &team)
 
-	// Top creators (empty is ok)
-	resp = doRequest(t, "GET", env.server.URL+"/api/v1/analytics/top-creators", nil, auth.Token)
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	resp.Body.Close()
+	_, err := env.db.Exec(`INSERT INTO tasks (team_id, title, status, created_by, assignee_id, created_at, closed_at) VALUES
+		(?, 'done-1', 'done', ?, ?, DATE_SUB(NOW(), INTERVAL 2 HOUR), DATE_SUB(NOW(), INTERVAL 1 HOUR)),
+		(?, 'done-2', 'done', ?, ?, DATE_SUB(NOW(), INTERVAL 4 HOUR), DATE_SUB(NOW(), INTERVAL 2 HOUR)),
+		(?, 'todo-1', 'todo', ?, ?, NOW(), NULL)`,
+		team.ID, owner.ID, owner.ID, team.ID, owner.ID, owner.ID, team.ID, owner.ID, owner.ID)
+	require.NoError(t, err)
+	_, err = env.db.Exec(`INSERT INTO task_comments (task_id, user_id, content)
+		SELECT id, ?, 'comment' FROM tasks WHERE team_id = ? LIMIT 2`, owner.ID, team.ID)
+	require.NoError(t, err)
 
-	// Integrity check (empty is ok)
-	resp = doRequest(t, "GET", env.server.URL+"/api/v1/analytics/integrity-check", nil, auth.Token)
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	resp.Body.Close()
+	resp = doRequest(t, "GET", fmt.Sprintf("%s/api/v1/teams/%d/stats", env.server.URL, team.ID), nil, auth.Token)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var stats models.TeamStats
+	parseJSON(t, resp, &stats)
+	assert.Equal(t, team.ID, stats.TeamID)
+	assert.Equal(t, 2, stats.TasksByStatus["done"])
+	assert.Equal(t, 1, stats.TasksByStatus["todo"])
+	assert.Equal(t, 2, stats.CommentCount)
+	require.Len(t, stats.TopAssignees, 1)
+	assert.Equal(t, owner.ID, stats.TopAssignees[0].UserID)
+	assert.Equal(t, 2, stats.TopAssignees[0].ClosedTasks)
+	require.NotNil(t, stats.AverageClosingTimeSeconds)
+	assert.InDelta(t, 5400, *stats.AverageClosingTimeSeconds, 5)
 }
-
