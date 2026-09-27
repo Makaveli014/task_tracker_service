@@ -1,4 +1,3 @@
-# TestTask_Bazis
 
 REST API управления задачами команд на Go, MySQL и Redis.
 
